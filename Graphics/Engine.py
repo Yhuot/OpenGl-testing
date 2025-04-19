@@ -89,7 +89,6 @@ class Object:
 
     def draw(self):
 
-
         camera: Camera = self.getCamera()
 
         glPushMatrix()
@@ -134,21 +133,18 @@ class Camera:
     def get_projection_matrix(self):
         return perspective(radians(self.fov), self.aspect_ratio, self.near, self.far)
 
-    def apply_matrices(self):
-        # Upload matrices to OpenGL — call this before rendering the scene
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        gluPerspective(self.fov, self.aspect_ratio, self.near, self.far)
+    def apply_matrices(self, shader):
+        shader.use()
 
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-        look_target = self.position + self.direction
-        #look_target = vec3(0.0, 0.0, -1.0)
-        gluLookAt(
-            self.position.x, self.position.y, self.position.z,
-            look_target.x, look_target.y, look_target.z,
-            self.up.x, self.up.y, self.up.z
-        )
+        # Get matrices
+        view = self.get_view_matrix()
+        projection = self.get_projection_matrix()
+
+        # Upload to shader
+        shader.set_mat4("view", view)
+        shader.set_mat4("projection", projection)
+
+
 
     def move(self, by: vec3):
         self.position += by
@@ -171,67 +167,102 @@ class Camera:
         self.direction = normalize(vec3(rotated_dir))
 
     def rotate_to(self, pitch: float, yaw: float, roll: float = 0.0):
-        # Create rotation matrices
-        yaw_matrix = rotate(mat4(1.0), radians(yaw), self.up)
-        right = normalize(cross(vec3(0.0, 0.0, -1.0), self.up))
-        pitch_matrix = rotate(mat4(1.0), radians(pitch), right)
+        pitch_rad = radians(pitch)
+        yaw_rad = radians(yaw)
 
-        # Combine rotations
-        rotation = yaw_matrix * pitch_matrix
-
-        # Rotate direction
-        rotated_dir = vec4(self.direction, 0.0)
-        rotated_dir = rotation * rotated_dir
-        self.direction = normalize(vec3(rotated_dir))
+        # Rebuild direction from angles (FPS-style camera control)
+        self.direction = normalize(vec3(
+            cos(pitch_rad) * sin(yaw_rad),
+            sin(pitch_rad),
+            -cos(pitch_rad) * cos(yaw_rad)
+        ))
 
 class Root:
-    def __init__(self, Width: int = 1366, Height: int = 768, FOV: float = 45.0, RenderDistance: float = 100, BGColor: tuple = (0.31, 0.31, 0.31, 1.0)):
-        self.display = None
-        self.screen = None
-        self.BGColor = BGColor
-        # OpenGL states
-        self.windowGeometry = (Width, Height)
-        self.FOV = FOV
-        self.cameras: List[Camera] = [Camera(self, 0, width=1366, height=768, position=vec3(0.0, 0.0, 5.0), active=True)]
-        self.activeCamera: int = 0
-        self.clock = pygame.time.Clock()
-        self.root = Object(self, "Root", activeCamera=self.cameras[self.activeCamera])
-
-
-    def start(self):
+    def __init__(self, physics_frequency: int = 60, visuals_frequency: int = 60, Width: int = 1366, Height: int = 768, FOV: float = 45.0, RenderDistance: float = 100, BGColor: tuple = (0.31, 0.31, 0.31, 1.0)):
         pygame.init()
+        
+        self.windowGeometry = (Width, Height)
+        self.physics_frequency = physics_frequency
+        self.visuals_frequency = visuals_frequency
         self.display = self.windowGeometry
+        self.FOV = FOV
+        self.BGColor = BGColor
+
+        # OpenGL setup
+        pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 0)  # Disable VSync
         self.screen = pygame.display.set_mode(self.display, pygame.DOUBLEBUF | pygame.OPENGL)
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LESS)
+
         self.shaders = shaderManager()
         self.shaders.add_shader({
-                "name": "default",
-                "albedo": (1.0, 1.0, 1.0), 
-                "roughness": 0.5, 
-                "reflectiveness": 0.5
-            })
+            "name": "default",
+            "albedo": (1.0, 1.0, 1.0), 
+            "roughness": 0.5, 
+            "reflectiveness": 0.5
+        })
 
-    
-    def update(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+        self.running = True
+        self.cameras: List[Camera] = [Camera(self, 0, width=Width, height=Height, position=vec3(0.0, 0.0, 5.0), active=True)]
+        self.activeCamera: int = 0
+        self.root = Object(self, "Root", activeCamera=self.cameras[self.activeCamera])
 
-        # Clear screen and depth buffer
-        glClearColor(self.BGColor[0], self.BGColor[1], self.BGColor[2], self.BGColor[3])
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        self.root.draw()
-        # Swap buffers and cap framerate
-        self.cameras[self.activeCamera].apply_matrices()
-        pygame.display.flip()
+        # ONE CLOCK TO RULE THEM ALL
+        self.clock = pygame.time.Clock()
+        self.physics_timer = 0.0
+        self.visuals_timer = 0.0
+
+        # Precomputed frame time targets in milliseconds
+        self.physics_timestep = 1000.0 / self.physics_frequency
+        self.visuals_timestep = 1000.0 / self.visuals_frequency
+
+
+        self.root.addChild("Cube", position=vec3(0.0, 0.0, -5.0))
+        self.root.children["Cube"].addShape("Cube", Shapes.Cube(self.root.children["Cube"],vec3(0, 0, 0), vec3(0, 0, 0), (1.0, 1.0, 1.0), vec3(1, 1, 1,)))
+
+
+        self.main_loop()
+
+    def main_loop(self):
+        while self.running:
+            delta = self.clock.tick()  # Returns time in ms since last tick
+            self.physics_timer += delta
+            self.visuals_timer += delta
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+
+            # Physics update
+            if self.physics_timer >= self.physics_timestep:
+                # Call physics update functions here
+                self.physics_timer -= self.physics_timestep  # Subtract instead of zeroing for better accuracy
+
+            # Visual update
+            if self.visuals_timer >= self.visuals_timestep:
+                # Clear screen and depth buffer
+                glClearColor(*self.BGColor)
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+                # Draw objects here
+                self.root.draw()
+
+                # Swap buffers
+                pygame.display.flip()
+                self.visuals_timer -= self.visuals_timestep
+
+        self.stop()
+
+    # Utility methods
+    def stop(self):
+        pygame.quit()
 
     def addCamera(self, width: int, height: int, fov: float = 45.0, near: float = 0.1, far: float = 100.0,
-                 position: vec3 = vec3(0.0, 0.0, 0.0)):
+                  position: vec3 = vec3(0.0, 0.0, 0.0)):
         self.cameras.append(Camera(self, width=width, height=height, fov=fov, near=near, far=far, position=position, id=len(self.cameras)))
 
     def removeCamera(self, id):
-        if id < len(self.cameras) and id > -1 and len(self.cameras) > 0:
+        if 0 <= id < len(self.cameras):
             if self.activeCamera == id:
                 print("Cannot delete active camera, dumbass")
             else:
@@ -241,7 +272,7 @@ class Root:
         return self.cameras[self.activeCamera]
 
     def activateCamera(self, id):
-        if id < len(self.cameras) and id > -1 and len(self.cameras) > 0:
+        if 0 <= id < len(self.cameras):
             self.cameras[id].active = True
             self.activeCamera = id
 
@@ -250,16 +281,14 @@ class Root:
             self.root.addChild(name, Object(name, None, self.root, position, angle, scale))
         else:
             i = 1
-            new_name = name + "_" + str(i)
+            new_name = f"{name}_{i}"
             while new_name in self.root.children:
                 i += 1
+                new_name = f"{name}_{i}"
             self.root.addChild(new_name, Object(new_name, None, self.root, position, angle, scale))
 
     def removeObject(self, name: str):
         self.root.removeChild(name)
-
-    def stop(self):
-        pygame.quit()
 
 
 

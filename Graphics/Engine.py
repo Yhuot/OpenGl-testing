@@ -240,6 +240,8 @@ class Root:
 
             # Visual update
             if self.visuals_timer >= self.visuals_timestep:
+                self.useShader("default")
+
                 # Clear screen and depth buffer
                 glClearColor(*self.BGColor)
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -250,8 +252,11 @@ class Root:
                 # Swap buffers
                 pygame.display.flip()
                 self.visuals_timer -= self.visuals_timestep
-
+                
         self.stop()
+
+    def useShader(self, name):
+        self.get_activeCamera().apply_matrices(self.shaders.get_shader("default"))
 
     # Utility methods
     def stop(self):

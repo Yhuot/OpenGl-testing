@@ -67,15 +67,9 @@ class Triangle(Shape):
 
     def draw(self):
         material = self.object.rootNode.shaders.get_shader(self.material)
-
-        # Apply camera matrices before rendering
-        camera = self.object.getCamera()  # Get the active camera
-        camera.apply_matrices(material)  # This will set the correct view and projection
-
         # Set the model matrix for the current object
         model = self.get_model_matrix()
         material.set_mat4("model", model)
-
         # Optionally pass color to shader
         glUniform3f(glGetUniformLocation(material.id, b"color"), 1.0, 1.0, 1.0)
 

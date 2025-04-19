@@ -186,6 +186,8 @@ class Camera:
 
 class Root:
     def __init__(self, Width: int = 1366, Height: int = 768, FOV: float = 45.0, RenderDistance: float = 100, BGColor: tuple = (0.31, 0.31, 0.31, 1.0)):
+        self.display = None
+        self.screen = None
         self.BGColor = BGColor
         # OpenGL states
         self.windowGeometry = (Width, Height)
@@ -198,8 +200,8 @@ class Root:
 
     def start(self):
         pygame.init()
-        display = self.windowGeometry
-        screen = pygame.display.set_mode(display, pygame.DOUBLEBUF | pygame.OPENGL)
+        self.display = self.windowGeometry
+        self.screen = pygame.display.set_mode(self.display, pygame.DOUBLEBUF | pygame.OPENGL)
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LESS)
         self.shaders = shaderManager()
